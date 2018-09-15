@@ -1,0 +1,235 @@
+apiVersion: v1
+kind: Template
+labels:
+  template: rabbitmq
+message: |-
+  A new RabbitMQ statefulset cluster "${SERVICE_NAME}" has been created.
+
+     Username: ${RABBITMQ_DEFAULT_USER}
+     Password: ${RABBITMQ_DEFAULT_PASS}
+metadata:
+  annotations:
+    description: RabbitMQ Statefulset Cluster
+    iconClass: icon-erlang
+    tags: erlang,rabbitmq,cluster
+  name: rabbitmq
+objects:
+- apiVersion: v1
+  kind: RoleBinding
+  metadata:
+    labels:
+      application: ${SERVICE_NAME}
+    name: ${SERVICE_NAME}:view
+  roleRef:
+    name: view
+  subjects:
+    - kind: ServiceAccount
+      name: default
+
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: ${SERVICE_NAME}
+  data:
+    enabled_plugins: '[rabbitmq_management,rabbitmq_peer_discovery_k8s].'
+    additional_erl_args: '-rabbit cluster_formation [{peer_discovery_backend,rabbit_peer_discovery_k8s},{randomized_startup_delay_range,[{min,0},{max,1}]}] loopback_users [{guest,false}]'
+
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ${SERVICE_NAME}
+    annotations:
+      template.openshift.io/expose-username: '{.data[''username'']}'
+      template.openshift.io/expose-password: '{.data[''password'']}'
+      template.openshift.io/expose-cookie: '{.data[''cookie'']}'
+  type: Opaque
+  stringData:
+    username: ${RABBITMQ_DEFAULT_USER}
+    password: ${RABBITMQ_DEFAULT_PASS}
+    cookie: ${RABBITMQ_COOKIE}
+
+- apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    name: ${SERVICE_NAME}
+    labels:
+      application: ${SERVICE_NAME}
+  spec:
+    replicas: 3
+    selector:
+      matchLabels:
+        application: ${SERVICE_NAME}
+    serviceName: ${SERVICE_NAME}
+    template:
+      metadata:
+        labels:
+          application: ${SERVICE_NAME}
+      spec:
+        containers:
+          - name: rabbitmq
+            image: ${RABBITMQ_IMAGE}
+            imagePullPolicy: Always
+            env:
+              - name: RABBITMQ_ERLANG_COOKIE
+                valueFrom:
+                  secretKeyRef:
+                    name: ${SERVICE_NAME}
+                    key: cookie
+              - name: RABBITMQ_DEFAULT_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: ${SERVICE_NAME}
+                    key: username
+              - name: RABBITMQ_DEFAULT_PASS
+                valueFrom:
+                  secretKeyRef:
+                    name: ${SERVICE_NAME}
+                    key: password
+              - name: RABBITMQ_DEFAULT_VHOST
+                value: ${RABBITMQ_DEFAULT_VHOST}
+              - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
+                valueFrom:
+                  configMapKeyRef:
+                    name: ${SERVICE_NAME}
+                    key: additional_erl_args
+              - name: K8S_NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    apiVersion: v1
+                    fieldPath: metadata.namespace
+              - name: K8S_SERVICE_NAME
+                value: ${SERVICE_NAME}
+              - name: K8S_HOSTNAME_SUFFIX
+                value: ".$(K8S_SERVICE_NAME).$(K8S_NAMESPACE).svc.cluster.local"
+              - name: K8S_ADDRESS_TYPE
+                value: hostname
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    apiVersion: v1
+                    fieldPath: metadata.name
+              - name: RABBITMQ_NODENAME
+                value: "rabbit@$(POD_NAME)$(K8S_HOSTNAME_SUFFIX)"
+              - name: RABBITMQ_USE_LONGNAME
+                value: "true"
+            ports:
+              - name: management
+                containerPort: 15672
+                protocol: TCP
+              - name: service
+                containerPort: 5672
+                protocol: TCP
+              - name: erlang-server
+                containerPort: 25672
+                protocol: TCP
+              - name: epmd
+                containerPort: 4369
+                protocol: TCP
+            volumeMounts:
+              - name: mnesia
+                mountPath: /var/lib/rabbitmq/mnesia
+              - name: config
+                mountPath: /etc/rabbitmq/enabled_plugins
+                subPath: enabled_plugins
+            livenessProbe:
+              exec:
+                command: ["rabbitmqctl", "status"]
+              initialDelaySeconds: 60
+              periodSeconds: 60
+              timeoutSeconds: 10
+            readinessProbe:
+              exec:
+                command: ["rabbitmqctl", "status"]
+              initialDelaySeconds: 20
+              periodSeconds: 60
+              timeoutSeconds: 10
+            resources:
+              requests:
+                cpu: ${CPU_REQUEST}
+                memory: ${MEMORY_REQUEST}
+        volumes:
+          - name: config
+            configMap:
+              name: ${SERVICE_NAME}
+    volumeClaimTemplates:
+      - metadata:
+          name: mnesia
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: ${RABBITMQ_MNESIA_SIZE}
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      application: ${SERVICE_NAME}
+      type: LoadBalancer
+    name: ${SERVICE_NAME}
+  spec:
+    clusterIP: None
+    ports:
+      - name: management
+        port: 15672
+        targetPort: 15672
+        protocol: TCP
+      - name: service
+        port: 5672
+        targetPort: 5672
+        protocol: TCP
+      - name: erlang-server
+        port: 25672
+        targetPort: 25672
+        protocol: TCP
+      - name: epmd
+        port: 4369
+        targetPort: 4369
+        protocol: TCP
+    selector:
+      application: ${SERVICE_NAME}
+    sessionAffinity: None
+    type: ClusterIP
+
+parameters:
+  - name: SERVICE_NAME
+    displayName: Service Name
+    required: true
+    value: rabbitmq
+  - name: RABBITMQ_IMAGE
+    displayName: Container Image
+    required: true
+    value: docker.io/rabbitmq:3.7-management-alpine
+  - name: RABBITMQ_HIGH_WATERMARK
+    displayName: High Watermark
+    description: High watermark value to use for the node
+    value: 1GiB
+  - name: MEMORY_REQUEST
+    displayName: Memory Request
+    description: Memory to request for the container
+    value: 512Mi
+  - name: CPU_REQUEST
+    displayName: CPU Request
+    description: CPU to request for the container
+    value: 500m
+  - name: RABBITMQ_MNESIA_SIZE
+    displayName: Mnesia Database Capacity
+    description: RabbitMQ node's mnesia database capacity
+    value: 2Gi
+  - name: RABBITMQ_DEFAULT_VHOST
+    displayName: Default vHost
+    description: RabbitMQ vHost configuration
+    value: /
+  - name: RABBITMQ_DEFAULT_USER
+    displayName: Default User
+    generate: expression
+    from: 'user{a-zA-Z0-9}{4}'
+  - name: RABBITMQ_DEFAULT_PASS
+    displayName: Default Password
+    generate: expression
+    from: '{a-zA-Z0-9}{32}'
+  - name: RABBITMQ_COOKIE
+    displayName: Erlang Cookie
+    generate: expression
+    from: '[a-zA-Z0-9]{64}'
