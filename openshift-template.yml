@@ -9,9 +9,10 @@ message: |-
      Password: ${RABBITMQ_DEFAULT_PASS}
 metadata:
   annotations:
-    description: RabbitMQ Statefulset Cluster
-    iconClass: icon-erlang
-    tags: erlang,rabbitmq,cluster
+    description: RabbitMQ Message Broker Statefulset Cluster
+    iconClass: icon-rabbitmq
+    openshift.io/display-name: RabbitMQ Cluster
+    tags: erlang,rabbitmq,cluster,messaging
   name: rabbitmq
 objects:
 - apiVersion: v1
