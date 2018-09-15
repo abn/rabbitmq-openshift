@@ -225,11 +225,11 @@ parameters:
   - name: RABBITMQ_DEFAULT_USER
     displayName: Default User
     generate: expression
-    from: 'user{a-zA-Z0-9}{4}'
+    from: 'user[a-zA-Z0-9]{4}'
   - name: RABBITMQ_DEFAULT_PASS
     displayName: Default Password
     generate: expression
-    from: '{a-zA-Z0-9}{32}'
+    from: '[a-zA-Z0-9]{32}'
   - name: RABBITMQ_COOKIE
     displayName: Erlang Cookie
     generate: expression
